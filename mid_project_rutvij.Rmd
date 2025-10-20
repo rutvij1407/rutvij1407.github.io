@@ -1,0 +1,169 @@
+---
+title: "mid_project_rutvij"
+output:
+  html_document: default
+  pdf_document: default
+---
+---
+title: "STAT 515 — Redesign Project: Unemployment in Europe"
+author: "Vakati Rutvij Reddy"
+date: "October 20, 2025"
+output:
+  pdf_document:
+    latex_engine: xelatex   # fixes Unicode like ≥
+    toc: true
+    number_sections: false
+    fig_width: 7
+    fig_height: 4.5
+    df_print: kable
+  html_document:
+    toc: true
+geometry: margin=1in
+---
+
+```{r}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
+library(eurostat)
+library(tidyverse)
+library(countrycode)
+library(scales)
+library(forcats)
+
+cty_names <- function(x) countrycode(
+  x, "iso2c", "country.name",
+  custom_match = c(EU="European Union", EL="Greece")
+)
+# aggregates we’ll exclude for country charts (we will still use EU aggregate for Fig 1)
+drop_geos <- c("EU27_2020","EA19","EA20","EFTA","UK")
+
+```
+
+
+```{r}
+df <- get_eurostat("une_rt_a")
+if ("TIME_PERIOD" %in% names(df)) names(df)[names(df)=="TIME_PERIOD"] <- "time"
+
+eu_code <- if ("EU27_2020" %in% unique(df$geo)) "EU27_2020" else "EU"
+
+eu_ts <- df %>%
+mutate(year = as.numeric(substr(as.character(time), 1, 4))) %>%
+filter(geo == eu_code, age == "Y15-74", unit == "PC_ACT",
+sex %in% c("F","M","T"), year >= 2015, year <= 2024) %>%
+mutate(sex = factor(sex, levels = c("F","M","T"),
+labels = c("Female","Male","Total")))
+
+p_fig1 <- ggplot(eu_ts, aes(x = year, y = values, color = sex, group = sex)) +
+geom_line(linewidth = 1.2) +
+geom_point(size = 2) +
+scale_color_manual(values = c("Female"="#E69F00","Male"="#56B4E9","Total"="#444444"),
+breaks = c("Female","Male","Total"), name = NULL) +
+scale_y_continuous(labels = label_percent(accuracy = 0.1, scale = 1)) +
+scale_x_continuous(breaks = 2015:2024) +
+labs(title = "Unemployment rate by sex, EU, 2015–2024",
+subtitle = "European Union aggregate · Age 15–74 · % of labour force",
+x = "Year", y = "% of labour force",
+caption = "Source: Eurostat (une_rt_a)") +
+theme_minimal(base_size = 13) +
+theme(plot.title = element_text(face="bold"), legend.position = "top")
+
+p_fig1
+
+```
+
+```{r}
+a <- df
+
+a <- a %>%
+mutate(year = as.numeric(substr(as.character(time), 1, 4)),
+country = cty_names(geo)) %>%
+filter(year == 2024, age == "Y15-74", unit == "PC_ACT",
+sex %in% c("F","M"), !is.na(country), !geo %in% drop_geos)
+
+
+totals_2024 <- df %>%
+mutate(year = as.numeric(substr(as.character(time), 1, 4))) %>%
+filter(year == 2024, sex == "T", age == "Y15-74", unit == "PC_ACT",
+!geo %in% drop_geos) %>%
+transmute(geo, total = values)
+
+a_top <- a %>%
+left_join(totals_2024, by = "geo") %>%
+arrange(desc(total)) %>%
+group_by(country) %>% slice_head(n = 2) %>% ungroup()
+
+p1 <- ggplot(a_top, aes(fct_reorder(country, total), values, fill = sex)) +
+geom_col(position = position_dodge(width = 0.7), width = 0.7, color = "white") +
+coord_flip() +
+scale_fill_manual(values = c("F"="#E69F00","M"="#56B4E9"),
+labels = c("F"="Female","M"="Male"), name = NULL) +
+scale_y_continuous(labels = label_percent(accuracy = 0.1, scale = 1)) +
+labs(title = "Unemployment rate by sex — 2024",
+subtitle = "EU countries · Age 15–74 · % of labour force · sorted by total",
+x = NULL, y = "% of labour force",
+caption = "Source: Eurostat (une_rt_a)") +
+theme_minimal(base_size = 8) +
+theme(plot.title = element_text(face="bold", size=16),
+plot.subtitle = element_text(color="gray40"),
+legend.position = "top",
+panel.grid.major.y = element_blank())
+
+p1
+
+
+```
+
+```{r}
+b <- get_eurostat("une_ltu_a")
+if ("TIME_PERIOD" %in% names(b)) names(b)[names(b)=="TIME_PERIOD"] <- "time"
+
+b <- b %>%
+mutate(year = as.numeric(substr(as.character(time), 1, 4)),
+country = cty_names(geo)) %>%
+filter(year >= 2015, year <= 2024,
+age == "Y15-74", unit == "PC_ACT", sex == "T",
+!is.na(country), !geo %in% drop_geos) %>%
+distinct(country, year, .keep_all = TRUE)
+
+keep <- b %>% filter(year == 2024) %>% slice_max(values, n = 12) %>% pull(country)
+b12 <- b %>% filter(country %in% keep)
+
+# facet order by 2024 value (high -> low)
+
+ord <- b12 %>%
+filter(year == 2024) %>%
+arrange(desc(values)) %>%
+distinct(country) %>%
+pull(country)
+
+b12 <- b12 %>% mutate(country = factor(country, levels = ord))
+
+```
+```{r}
+yrs <- c(2015, 2018, 2021, 2024)
+
+p2 <- ggplot(b12, aes(year, values, group = country)) +
+geom_line(color = "#2A6EA6", linewidth = 1.0, alpha = 0.95) +
+geom_point(color = "#2A6EA6", size = 2.2, alpha = 0.95) +
+facet_wrap(~ country, ncol = 3, scales = "free_y") +
+scale_x_continuous(breaks = yrs, limits = c(2015, 2024),
+expand = expansion(mult = c(0.02, 0.04))) +
+scale_y_continuous(labels = label_percent(accuracy = 0.1, scale = 1),
+breaks = scales::pretty_breaks(4)) +
+labs(title = "Long-term unemployment (2015–2024)",
+subtitle = "Top 12 countries by 2024 value · % of labour force unemployed ≥12 months",
+x = "Year", y = "% of labour force",
+caption = "Source: Eurostat (une_ltu_a)") +
+theme_minimal(base_size = 5) +
+theme(plot.title = element_text(face="bold", size=9),
+plot.subtitle = element_text(color="gray40"),
+strip.text = element_text(face="bold", size = 10),
+axis.text.x = element_text(size = 6),
+axis.text.y = element_text(size = 6),
+panel.grid.minor = element_blank(),
+panel.grid.major.x = element_blank(),
+panel.spacing = unit(10, "pt"))
+
+p2
+
+```
